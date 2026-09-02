@@ -173,6 +173,15 @@ function StatRow({ label, value, max = 100, accent, description }) {
   );
 }
 
+export function normalizeApiBase(url) {
+  if (!url) return "http://localhost:8000/api/v1";
+  let clean = url.trim().replace(/\/+$/, "");
+  if (!clean.endsWith("/api/v1")) {
+    clean += "/api/v1";
+  }
+  return clean;
+}
+
 /* -------------------------------------------------------------------------
    Connection indicator — pings /health so the person can tell at a glance
    whether the backend is actually reachable, instead of guessing.
@@ -182,9 +191,22 @@ function useBackendStatus(apiBase) {
   useEffect(() => {
     let cancelled = false;
     setStatus("checking");
-    fetch(`${apiBase}/health`)
-      .then((r) => { if (!cancelled) setStatus(r.ok ? "ok" : "down"); })
-      .catch(() => { if (!cancelled) setStatus("down"); });
+    const normalized = normalizeApiBase(apiBase);
+    const rootUrl = normalized.replace(/\/api\/v1$/, "");
+
+    // Try /api/v1/health first, fallback to root /health
+    fetch(`${normalized}/health`)
+      .then((r) => {
+        if (!cancelled) {
+          if (r.ok) setStatus("ok");
+          else throw new Error("not ok");
+        }
+      })
+      .catch(() => {
+        fetch(`${rootUrl}/health`)
+          .then((r2) => { if (!cancelled) setStatus(r2.ok ? "ok" : "down"); })
+          .catch(() => { if (!cancelled) setStatus("down"); });
+      });
     return () => { cancelled = true; };
   }, [apiBase]);
   return status;
@@ -230,7 +252,8 @@ function UploadScreen({ apiBase, setApiBase, onScanComplete }) {
         target_name: targetName || "uploaded-project",
         quantum_threat_horizon_years: String(threatHorizon),
       });
-      const url = `${apiBase}/scans/upload?${params.toString()}`;
+      const base = normalizeApiBase(apiBase);
+      const url = `${base}/scans/upload?${params.toString()}`;
       const res = await fetch(url, { method: "POST", body: form });
       if (!res.ok) {
         const body = await res.text();
