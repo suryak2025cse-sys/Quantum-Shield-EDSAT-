@@ -1,0 +1,42 @@
+name: QuantumShield AI Cryptographic Security Gate
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  quantumshield-scan:
+    name: Quantum & Crypto Security Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install QuantumShield Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run QuantumShield CI/CD Gate Scanner
+        run: |
+          python -m app.cicd.cicd_scanner \
+            --dir . \
+            --policy backend/app/cicd/default_policy.json \
+            --format sarif \
+            --output quantumshield-results.sarif
+        env:
+          PYTHONPATH: backend
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: quantumshield-results.sarif

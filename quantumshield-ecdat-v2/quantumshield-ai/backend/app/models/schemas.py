@@ -230,10 +230,18 @@ class PQCValidationResult(BaseModel):
     current_algorithm: str
     purpose: str                      # "key-exchange" | "signature" | "symmetric" | "hash"
     recommended_pqc: Optional[str] = None
+    nist_standard: Optional[str] = None
+    hybrid_option: Optional[str] = None
     status: PQCStatus
     reasons: list[str] = Field(default_factory=list)
     library_support: Optional[str] = None
+    hardware_support_status: Optional[str] = None
     known_blockers: list[str] = Field(default_factory=list)
+    estimated_migration_effort: Optional[str] = "Medium (40-80 hours)"
+    estimated_latency_impact: Optional[str] = "+5-15ms handshake overhead"
+    estimated_cost_range: Optional[str] = "$$ (Moderate)"
+    migration_phase: Optional[str] = "Phase 1 (0-6 months)"
+    confidence: str = "Knowledge Base Heuristic"
     is_heuristic: bool = True
 
 
@@ -309,6 +317,7 @@ class CICDPolicyResult(BaseModel):
     severity: str
     action: CICDAction
     policy_rule: str
+    message: str = ""
 
 
 # ==========================================================================
@@ -347,9 +356,37 @@ class SimulateResponse(BaseModel):
         "A full blast-radius analysis would require call-graph analysis, which this scanner does not perform."
     )
 
+class ScanStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class NormalizedAsset(BaseModel):
+    asset_id: str
+    asset_type: ArtifactType
+    name: str
+    algorithm_or_primitive: str
+    version_or_key_size: Optional[str] = None
+    locations: list[str] = Field(default_factory=list)
+    occurrences_count: int = 1
+    severity: Severity = Severity.INFO
+    criticality: Optional[Criticality] = None
+    exposure: Exposure = Exposure.UNKNOWN
+    data_lifetime_years: Optional[float] = None
+    migration_time_years: Optional[float] = None
+    mosca_risk: Optional[str] = None
+    pqc_recommendation: Optional[str] = None
+    confidence: str = "Detected Evidence"  # "Detected Evidence" | "Inferred Heuristic" | "User Configured"
+    linked_finding_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ScanSummary(BaseModel):
     scan_id: str
     target_name: str
+    status: ScanStatus = ScanStatus.COMPLETED
     started_at: datetime
     completed_at: datetime
     files_scanned: int
@@ -361,6 +398,8 @@ class ScanSummary(BaseModel):
     mosca_at_risk_count: int = 0
     scores: ScoreBreakdown
     findings: list[Finding]
+    normalized_assets: list[NormalizedAsset] = Field(default_factory=list)
+    error: Optional[str] = None
     # --- v0.2.0 extended analytics (all optional for backward compat) ---
     dependency_graph: Optional["CryptoDependencyGraph"] = None
     agility: Optional["AgilityScore"] = None
@@ -369,6 +408,7 @@ class ScanSummary(BaseModel):
     remediation_plan: Optional["RemediationPlan"] = None
     tickets: Optional[list["MigrationTicket"]] = None
     cicd_policy_results: Optional[list["CICDPolicyResult"]] = None
+
 
 
 

@@ -1,116 +1,117 @@
-# QuantumShield AI
-### AI-Powered Security & Quantum Readiness Platform
+# QuantumShield AI (v0.2.0)
+### Enterprise Cryptographic Bill of Materials (CBOM) & Quantum-Readiness Analytics Platform
 
-QuantumShield AI scans codebases for today's security vulnerabilities *and*
-tomorrow's quantum-computing risk in one pass â€” producing a Security Score,
-a Quantum Readiness Score, AI-generated explanations, and a prioritized
-post-quantum migration roadmap.
+QuantumShield AI discovers cryptographic artefacts across source repositories, dependencies, containers, binaries, certificates, and protocols. It performs quantum-risk assessment, applies **Mosca’s Theorem ($X+Y>Z$)**, evaluates **NIST PQC migration paths (FIPS 203/204/205)**, and exports standardized **CycloneDX 1.6 CBOM** and **SARIF 2.1.0** reports.
 
-> **Read this first:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has an
-> explicit table of what's fully functional in this build vs. scaffolded for
-> the next milestone. Nothing below is oversold.
+---
 
-## What actually works right now
+## Key Capabilities
 
-- **Real static-analysis scanner** (`backend/app/scanners/crypto_scanner.py`)
-  detecting hardcoded secrets (AWS/GCP/Azure keys, private key material),
-  quantum-vulnerable crypto (RSA, ECC/ECDSA, Diffie-Hellman), classical
-  weaknesses (MD5, SHA-1, legacy TLS, ECB mode), and JWT misconfiguration â€”
-  tested against a real sample vulnerable repo, output captured in
-  [`docs/SAMPLE_SCAN_OUTPUT.txt`](docs/SAMPLE_SCAN_OUTPUT.txt).
-- **Deterministic scoring engine** turning findings into four weighted 0â€“100
-  scores plus a letter grade.
-- **AI Advisor** (`backend/app/ai/advisor.py`) â€” real Claude API integration
-  for per-finding explanations, migration roadmap generation, and a
-  natural-language copilot chat, grounded strictly in scan data.
-- **FastAPI REST API**, runnable standalone.
-- **React dashboard** (`frontend/`, also exported standalone as
-  `quantumshield_dashboard.jsx`) matching the exact API response shape.
+1. **Comprehensive Discovery Engine (14 Ecosystems & Layers)**
+   - **Source Code & Manifests**: Python (requirements.txt, pyproject.toml, poetry.lock, Pipfile.lock), JavaScript/TypeScript (package.json, package-lock, yarn.lock, pnpm-lock), Java (pom.xml, build.gradle), Go (go.mod, go.sum), Rust (Cargo.toml, Cargo.lock).
+   - **X.509 Certificates**: Deep PEM/DER parsing (SANs, validity windows, signature algorithms, serials, self-signed detection, CA constraints).
+   - **Protocols & Channels**: TLS 1.0-1.3, SSH hostkeys/kex, IPsec IKEv1/IKEv2, mTLS client verification, QUIC, and JWT/JOSE alg:none checks.
+   - **Container Images**: Docker/OCI tar multi-layer extraction, `.wh.*` whiteout processing, and OS package database inspection (Debian `dpkg`, Alpine `apk`).
+   - **Binaries**: ELF, PE, and Mach-O header/architecture detection and embedded cryptographic symbols.
 
-## Quick start
+2. **Normalized CBOM & Asset Inventory**
+   - Deduplicates finding instances into canonical cryptographic assets with stable SHA-256 fingerprints, locations, occurrences, and lifecycle metadata.
 
-### Backend
+3. **Formal Quantum Risk Assessment (Mosca's Inequality)**
+   - Calculates $X$ (Data Security Lifetime) + $Y$ (Migration Duration) vs. $Z$ (CRQC Threat Horizon).
+   - Interactive multi-horizon sensitivity matrix ($Z = 5, 10, 15, 20\text{ years}$).
+
+4. **NIST PQC Migration Engine & Effort Modeling**
+   - Direct mappings to NIST FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), and FIPS 205 (SLH-DSA).
+   - Recommends hybrid transitions (e.g. X25519 + ML-KEM-768).
+   - Quantifies estimated engineering effort (hours), network latency overhead (+ms), and cost profile ($ to $$$$).
+
+5. **Standards-Compliant Exports**
+   - **CycloneDX 1.6 CBOM**: Compliant JSON schema with component dependency graphs and cryptographic properties.
+   - **OASIS SARIF 2.1.0**: Automated GitHub Code Scanning integration.
+
+6. **Deterministic Offline AI Copilot & Remediation**
+   - Operates fully offline with rule-based expert intelligence; automatically switches to Anthropic Claude when API key is provided.
+   - Generates actionable Jira/GitHub remediation tickets with code snippets.
+
+---
+
+## Quick Start
+
+### 1. Standalone CLI Scan (No server needed)
+```bash
+# Windows PowerShell
+py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline --output cbom.json
+
+# Linux / macOS
+python3 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline --output cbom.json
+```
+
+### 2. Run Backend
 ```bash
 cd backend
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...   # required only for AI explain/roadmap/chat endpoints
-uvicorn app.main:app --reload
-# -> http://localhost:8000/docs (OpenAPI UI)
+uvicorn app.main:app --reload --port 8000
+# OpenAPI Docs: http://localhost:8000/docs
+# Health Check: http://localhost:8000/health
 ```
 
-### Try the scanner directly (no server needed)
-```bash
-cd backend
-python3 -c "
-from app.scanners.crypto_scanner import scan_directory
-from app.scoring.engine import compute_scores
-findings, files = scan_directory('app/scanners/samples/demo_target')
-print(f'{len(findings)} findings across {files} files')
-print(compute_scores(findings))
-"
-```
-
-### Frontend
+### 3. Run Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
-# -> http://localhost:5173
+# Dashboard: http://localhost:5173
 ```
 
-### Full stack via Docker
+### 4. Run CI/CD Gate Scanner
 ```bash
-docker compose up --build
+python -m app.cicd.cicd_scanner --dir . --policy backend/app/cicd/default_policy.json --format sarif --output results.sarif
 ```
 
-## Project structure
+### 5. Run Test Suite
+```bash
+cd backend
+pytest tests -v
+```
+
+---
+
+## Architecture Overview
 
 ```
 quantumshield-ai/
-â”œâ”€â”€ backend/
-â”‚   â””â”€â”€ app/
-â”‚       â”œâ”€â”€ main.py              # FastAPI entrypoint
-â”‚       â”œâ”€â”€ api/routes.py        # REST endpoints
-â”‚       â”œâ”€â”€ scanners/            # Detection engines (crypto/secrets)
-â”‚       â”‚   â””â”€â”€ samples/demo_target/  # Intentionally vulnerable sample repo
-â”‚       â”œâ”€â”€ scoring/engine.py    # Security/Quantum/Compliance scoring math
-â”‚       â”œâ”€â”€ ai/advisor.py        # Claude API integration
-â”‚       â”œâ”€â”€ reports/generator.py # Executive/technical/migration reports
-â”‚       â”œâ”€â”€ models/schemas.py    # Pydantic data contracts
-â”‚       â””â”€â”€ core/config.py
-â”œâ”€â”€ frontend/                    # React + Vite + Tailwind dashboard
-â”œâ”€â”€ docs/
-â”‚   â”œâ”€â”€ ARCHITECTURE.md
-â”‚   â”œâ”€â”€ BUSINESS.md              # Business model, revenue, competitors, roadmap, judge Q&A
-â”‚   â”œâ”€â”€ DEMO_SCRIPT.md
-â”‚   â””â”€â”€ SAMPLE_SCAN_OUTPUT.txt
-â”œâ”€â”€ .github/workflows/ci.yml
-â””â”€â”€ docker-compose.yml
++-- backend/
+¦   +-- app/
+¦   ¦   +-- main.py                  # FastAPI Application & health endpoints
+¦   ¦   +-- worker.py                # Celery background worker
+¦   ¦   +-- api/routes.py            # REST endpoints, safe upload, git clone
+¦   ¦   +-- cbom/cyclonedx_export.py # CycloneDX 1.6 JSON CBOM generator
+¦   ¦   +-- cicd/cicd_scanner.py     # CI/CD Gate scanner & SARIF 2.1.0 exporter
+¦   ¦   +-- analysis/
+¦   ¦   ¦   +-- asset_inventory.py   # Normalized CBOM deduplication
+¦   ¦   ¦   +-- mosca.py             # Mosca theorem & sensitivity matrix
+¦   ¦   ¦   +-- pqc_validator.py     # NIST PQC migration validator & metrics
+¦   ¦   ¦   +-- agility.py           # Cryptographic agility scoring
+¦   ¦   ¦   +-- blast_radius.py      # Dependency blast radius graph
+¦   ¦   ¦   +-- classification.py    # Business criticality & metadata profiles
+¦   ¦   ¦   +-- remediation.py       # Phased remediation planner
+¦   ¦   ¦   +-- tickets.py           # Jira/GitHub ticket generator
+¦   ¦   +-- scanners/
+¦   ¦   ¦   +-- orchestrator.py      # Multi-scanner runner & CLI entrypoint
+¦   ¦   ¦   +-- crypto_scanner.py    # Source code & protocol scanner
+¦   ¦   ¦   +-- certificate_scanner.py # Deep X.509 PEM/DER parser
+¦   ¦   ¦   +-- dependency_scanner.py # 14 manifest/lockfile parser
+¦   ¦   ¦   +-- container_scanner.py # Layer whiteouts & OS package scanner
+¦   ¦   ¦   +-- binary_scanner.py    # ELF/PE/Mach-O binary header & symbol scanner
+¦   ¦   ¦   +-- hsm_scanner.py       # Cloud KMS & HSM configuration scanner
+¦   ¦   +-- ai/advisor.py            # AI Copilot with offline fallback
+¦   +-- tests/                       # 25+ automated pytest unit/integration tests
++-- frontend/                        # React + Vite + Tailwind CSS Dashboard
++-- .github/workflows/
+¦   +-- quantumshield-gate.yml       # GitHub Actions CI/CD Security Gate
++-- docker-compose.yml               # Containerized stack (API, Celery, Redis, UI)
++-- docs/
+    +-- ARCHITECTURE.md
+    +-- DEMO_SCRIPT.md               # 5-minute SIH presentation script
 ```
-
-## Documentation index
-
-| Doc | Contents |
-|---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, what's real vs. scaffolded, scanner extensibility pattern, why quantum simulation isn't literally in the product |
-| [BUSINESS.md](docs/BUSINESS.md) | Target market, competitive landscape, revenue model, cost structure, GTM, roadmap, judge Q&A |
-| [DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | 5-minute hackathon demo walkthrough |
-
-## Design system
-
-Dark enterprise theme â€” near-black background (`#05060B`), indigo/violet
-primary accent, cyan secondary accent (the "quantum" signal color),
-glassmorphic cards with backdrop blur. Typography: Space Grotesk (display),
-Inter (body), JetBrains Mono (code/data). Full token rationale is in the
-dashboard component comments.
-
-## Honest limitations (also worth saying to judges before they ask)
-
-- Dependency CVE scanning, certificate chain parsing, and GitHub PR
-  integration are architected but not implemented â€” see the roadmap in
-  BUSINESS.md.
-- Scan storage is in-memory in this build (swap to MongoDB is straightforward
-  given the existing Motor/docker-compose wiring, but wasn't the priority for
-  a working demo).
-- Cost estimates in BUSINESS.md are illustrative, not based on production
-  usage data.

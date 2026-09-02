@@ -1,49 +1,102 @@
-# QuantumShield AI — 5-Minute Demo Script
+# QuantumShield AI � SIH Live Demo Script & Runbook
 
-**0:00–0:40 — Hook**
-"Every organization here has a plan for today's cyberattacks. Almost none of
-you have a plan for 'harvest now, decrypt later' — where an attacker
-intercepts your encrypted traffic *today* and just waits for a quantum
-computer to decrypt it. NIST finalized post-quantum standards last year.
-The problem isn't that the migration is hard — it's that nobody knows what
-to migrate, because nobody has an inventory of where RSA and ECC actually
-live in their codebase. QuantumShield AI builds that inventory automatically
-and tells you what to fix first."
+This guide contains the exact steps and scripts to deliver a winning **5-minute live demo** of QuantumShield AI on Windows PowerShell or Linux/macOS.
 
-**0:40–1:30 — Live scan**
-Run the scanner against the sample vulnerable repo live in terminal:
+---
+
+## Quick Setup & Launch Commands
+
+### 1. Launch Backend (Terminal 1)
+**Windows PowerShell:**
+```powershell
+cd backend
+py -3.12 -m uvicorn app.main:app --reload --port 8000
 ```
-python -m app.scanners.crypto_scanner backend/app/scanners/samples/demo_target
+
+**Linux / macOS:**
+```bash
+cd backend
+python3 -m uvicorn app.main:app --reload --port 8000
 ```
-Point out: 13 real findings, in 4 files, in under a second — RSA/ECDSA key
-generation, MD5, legacy TLS, a hardcoded AWS key, a committed private key.
-"This isn't simulated output — this ran against real code just now."
+> Verify health at `http://localhost:8000/health`
 
-**1:30–2:30 — Dashboard walkthrough**
-Switch to the dashboard. Walk through:
-- Overall Health score and grade
-- Security Score vs. Quantum Readiness Score — explain why they're separate
-- The findings table, filter to "critical"
-- Point at the "harvest-risk" tag on the RSA/ECDSA findings specifically
+---
 
-**2:30–3:30 — AI Copilot**
-Ask the copilot live: *"Which of these should I fix first and why?"*
-Let it respond with prioritization reasoning grounded in the actual findings
-(harvest-now risk > active auth bypass > classical weaknesses), not generic
-advice.
+### 2. Launch Frontend (Terminal 2)
+```bash
+cd frontend
+npm run dev
+```
+> Open browser at `http://localhost:5173`
 
-**3:30–4:15 — Migration roadmap**
-Show the generated 3-phase roadmap (0-6mo / 6-18mo / 18-36mo) — this is the
-artifact a CISO takes into a budget conversation.
+---
 
-**4:15–5:00 — Business close**
-"This is a wedge into a market with a hard compliance deadline (CNSA 2.0)
-and no incumbent doing both classical and quantum scanning in one product.
-We're not asking you to believe quantum computers arrive tomorrow — we're
-asking you to recognize that encrypted data captured today is already at
-risk, and organizations need to know where that exposure lives before they
-can fix it."
+## 5-Minute SIH Demo Flow
 
-## Fallback if live demo breaks
-Have the dashboard screenshots and the terminal scan output (captured this
-session, see `docs/SAMPLE_SCAN_OUTPUT.txt`) ready as backup slides.
+### 0:00�0:45 | Hook & Problem Statement
+- **Narrative:**
+  > *"Every organization here scans for known CVEs. But almost nobody has an automated inventory of where asymmetric cryptography lives across their code, certificates, dependencies, and containers.*
+  > *With Harvest-Now, Decrypt-Later (HNDL) attacks and NIST's finalized PQC standards (FIPS 203, 204, 205), organizations face compliance deadlines (CNSA 2.0). QuantumShield AI provides an automated Cryptographic Bill of Materials (CBOM), Mosca risk assessment, and phased PQC migration planning."*
+
+---
+
+### 0:45�1:45 | Live CLI & CycloneDX 1.6 CBOM
+Demonstrate the stand-alone CLI runner live:
+```powershell
+# Windows PowerShell
+py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline --output cbom.json
+```
+- Highlight:
+  - Discovered 13+ cryptographic findings and dependencies in under 1 second.
+  - Generates official **CycloneDX 1.6 JSON CBOM** with component dependency trees.
+  - Zero cloud dependencies required; operates fully offline.
+
+---
+
+### 1:45�2:45 | Interactive Web Dashboard Walkthrough
+Switch to `http://localhost:5173` and upload `demo_target.zip` (or scan sample repo):
+1. **Executive Overview**:
+   - Distinct **Security Score** (classical vulnerabilities) vs. **Quantum Readiness Score** (Shor's algorithm exposure).
+2. **Normalized CBOM Inventory**:
+   - Unified assets deduplicated across files with stable fingerprints.
+3. **Mosca Inequality ($X + Y > Z$)**:
+   - Data Lifetime ($X$) + Migration Duration ($Y$) compared against CRQC Threat Horizon ($Z$).
+   - Show sensitivity matrix across $Z=5, 10, 15, 20$ years.
+4. **Blast Radius & Crypto Agility**:
+   - Identifies whether cryptography is modular or tightly coupled across dependent services.
+
+---
+
+### 2:45�3:45 | PQC Migration Validator & What-If Simulation
+1. **NIST PQC Migration Engine**:
+   - Recommends NIST FIPS 203 (ML-KEM-768 hybrid) for key exchange and FIPS 204 (ML-DSA) for signatures.
+   - Estimates migration effort (hours), latency impact (+ms), and cost range.
+2. **What-If Impact Simulator**:
+   - Select and resolve the RSA/ECC and weak JWT findings.
+   - Watch the overall health score dynamically update from Grade D to Grade A in real time.
+
+---
+
+### 3:45�4:30 | Offline AI Copilot & Remediation Tickets
+1. **Deterministic AI Advisor**:
+   - Ask: *"Which finding should I prioritize first for HNDL risk?"*
+   - Explains cryptographic blast radius and remediation with zero external API key needed.
+2. **Exportable Remediation Tickets**:
+   - Export structured Jira/GitHub Markdown tickets with step-by-step code fixes and NIST compliance references.
+
+---
+
+### 4:30�5:00 | CI/CD Security Gate & Close
+Demonstrate the CI/CD pipeline gate:
+```powershell
+py -3.12 -m app.cicd.cicd_scanner --dir app/scanners/samples/demo_target --format sarif --output results.sarif
+```
+- Blocks commits introducing quantum-vulnerable primitives without agility wrappers.
+- Exports SARIF 2.1.0 directly for GitHub Code Scanning integration.
+
+---
+
+## Backup Offline Fallback
+If live network or Docker is unavailable:
+- Run with the `--offline` flag: `py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline`
+- Use the built-in deterministic AI fallback for all advisor explanations and roadmaps.

@@ -197,6 +197,57 @@ def generate_report(results: list[CICDPolicyResult], target_dir: str) -> dict:
     }
 
 
+def generate_sarif_report(results: list[CICDPolicyResult], target_dir: str) -> dict:
+    """Generate official OASIS SARIF 2.1.0 report for GitHub Code Scanning integration."""
+    rules_map: dict[str, dict] = {}
+    sarif_results = []
+
+    for r in results:
+        rule_id = r.policy_rule or "QUANTUMSHIELD-RULE"
+        if rule_id not in rules_map:
+            rules_map[rule_id] = {
+                "id": rule_id,
+                "name": r.finding_title,
+                "shortDescription": {"text": r.finding_title},
+                "fullDescription": {"text": r.message},
+                "defaultConfiguration": {
+                    "level": "error" if r.action == CICDAction.BLOCK else ("warning" if r.action == CICDAction.WARN else "note")
+                },
+            }
+
+        sarif_results.append({
+            "ruleId": rule_id,
+            "level": "error" if r.action == CICDAction.BLOCK else ("warning" if r.action == CICDAction.WARN else "note"),
+            "message": {"text": r.message},
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": r.file_path.replace("\\", "/")},
+                        "region": {"startLine": 1},
+                    }
+                }
+            ],
+        })
+
+    return {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "QuantumShield AI CI/CD Gate",
+                        "version": "0.2.0",
+                        "informationUri": "https://github.com/quantumshield-ai",
+                        "rules": list(rules_map.values()),
+                    }
+                },
+                "results": sarif_results,
+            }
+        ],
+    }
+
+
 def save_baseline(findings: list[Finding], output_path: str) -> None:
     """Save current scan fingerprints as a new baseline for future comparisons."""
     fps = [fingerprint(f) for f in findings]
@@ -218,7 +269,8 @@ if __name__ == "__main__":
     parser.add_argument("--dir", required=True, help="Directory (or changed-files dir) to scan")
     parser.add_argument("--policy", default=None, help="Path to policy JSON file")
     parser.add_argument("--baseline", default=None, help="Path to baseline fingerprints JSON")
-    parser.add_argument("--output", default=None, help="Write JSON report to this file")
+    parser.add_argument("--format", choices=["json", "sarif"], default="json", help="Output format: json (default) or sarif")
+    parser.add_argument("--output", default=None, help="Write report to this file")
     parser.add_argument("--save-baseline", default=None, dest="save_baseline_path",
                         help="Save current scan as new baseline to this path")
     args = parser.parse_args()
@@ -226,7 +278,11 @@ if __name__ == "__main__":
     pol = load_policy(args.policy)
     base = load_baseline(args.baseline)
     results, fail = run_cicd_scan(args.dir, pol, base)
-    report = generate_report(results, args.dir)
+
+    if args.format == "sarif":
+        report = generate_sarif_report(results, args.dir)
+    else:
+        report = generate_report(results, args.dir)
 
     report_str = json.dumps(report, indent=2)
     if args.output:

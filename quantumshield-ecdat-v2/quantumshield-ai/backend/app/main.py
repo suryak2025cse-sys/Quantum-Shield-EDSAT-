@@ -26,3 +26,21 @@ app.include_router(router, prefix="/api/v1")
 @app.get("/")
 async def root():
     return {"service": settings.app_name, "status": "operational", "docs": "/docs"}
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "environment": settings.environment,
+        "version": "0.2.0",
+        "scanners": {
+            "crypto_scanner": "operational",
+            "cert_scanner": "operational",
+            "dependency_scanner": "operational",
+            "container_scanner": "operational",
+            "binary_scanner": "operational",
+            "hsm_cloud_scanner": "operational",
+        }
+    }

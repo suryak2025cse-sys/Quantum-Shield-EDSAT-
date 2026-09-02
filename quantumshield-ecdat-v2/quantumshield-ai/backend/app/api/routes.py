@@ -1,15 +1,19 @@
 """
 API Routes
 ===========
-REST surface for the scanning lifecycle. Scans run async via a background
-task (Celery in production — see docker-compose.yml — represented here with
-FastAPI BackgroundTasks for a runnable single-process demo).
+REST interface for QuantumShield scanning lifecycle, CBOM export, AI advisor,
+impact simulation, Git repository scanning, and CI/CD policy gates.
 """
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import subprocess
 import tempfile
 import uuid
+import zipfile
+import tarfile
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +23,7 @@ from pydantic import BaseModel
 
 from app.ai.advisor import chat_with_advisor, explain_finding, generate_migration_roadmap
 from app.analysis.agility import compute_agility_score
+from app.analysis.asset_inventory import build_normalized_inventory
 from app.analysis.blast_radius import compute_blast_radii
 from app.analysis.classification import ClassificationConfig
 from app.analysis.dependency_graph import build_crypto_dependency_graph
@@ -27,11 +32,12 @@ from app.analysis.pqc_validator import validate_pqc_migrations
 from app.analysis.related_findings import find_related_findings, DISCLAIMER_TEXT
 from app.analysis.remediation import build_remediation_plan
 from app.analysis.tickets import generate_tickets, ticket_to_dict, ticket_to_markdown
-from app.cbom.cyclonedx_export import generate_cbom
+from app.cbom.cyclonedx_export import generate_cbom, validate_cbom_structure
 from app.cicd.cicd_scanner import DEFAULT_POLICY, run_cicd_scan
 from app.models.schemas import (
     MetricDelta,
     RelatedFinding,
+    ScanStatus,
     ScanSummary,
     SimulateRequest,
     SimulateResponse,
@@ -47,15 +53,20 @@ from app.scoring.engine import compute_scores
 
 router = APIRouter()
 
-# In-memory store for the demo. Production uses MongoDB via Motor (see
-# app/core/db.py in the full build) — kept in-process here so the API is
-# runnable standalone without infra dependencies.
+# In-memory store for scans (fast and zero-infra requirement for standalone / demo)
 _SCANS: dict[str, ScanSummary] = {}
 
+# Safety thresholds for uploads
+MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024       # 100 MB archive limit
+MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024    # 500 MB unpacked limit (decompression bomb protection)
+MAX_EXTRACTED_FILES = 10000                     # Max files in archive
 
-class ScanRequest(BaseModel):
-    target_name: str
-    repo_url: str | None = None
+
+class GitScanRequest(BaseModel):
+    repo_url: str
+    target_name: str | None = None
+    branch: str | None = None
+    quantum_threat_horizon_years: float = 10.0
 
 
 class ChatRequest(BaseModel):
@@ -80,9 +91,20 @@ def _summarize(findings: list, files_scanned: int, target_name: str) -> ScanSumm
             mosca_at_risk += 1
 
     scores = compute_scores(findings)
+    normalized_assets = build_normalized_inventory(findings)
+
+    # Pre-calculate extended v0.2.0 analytical models so dashboard is fully hydrated
+    graph = build_crypto_dependency_graph(findings)
+    agility = compute_agility_score(findings)
+    blast_radii = compute_blast_radii(findings, graph)
+    pqc_validations = validate_pqc_migrations(findings)
+    remediation_plan = build_remediation_plan(findings, blast_radii, pqc_validations)
+    tickets = generate_tickets(findings, blast_radii, pqc_validations)
+
     return ScanSummary(
         scan_id=str(uuid.uuid4()),
         target_name=target_name,
+        status=ScanStatus.COMPLETED,
         started_at=datetime.utcnow(),
         completed_at=datetime.utcnow(),
         files_scanned=files_scanned,
@@ -94,7 +116,54 @@ def _summarize(findings: list, files_scanned: int, target_name: str) -> ScanSumm
         mosca_at_risk_count=mosca_at_risk,
         scores=scores,
         findings=findings,
+        normalized_assets=normalized_assets,
+        dependency_graph=graph,
+        agility=agility,
+        blast_radii=blast_radii,
+        pqc_validations=pqc_validations,
+        remediation_plan=remediation_plan,
+        tickets=tickets,
     )
+
+
+def _safe_unpack_zip(zip_path: Path, extract_dir: Path):
+    """Safely extracts ZIP with path traversal and decompression bomb guards."""
+    total_size = 0
+    file_count = 0
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            file_count += 1
+            if file_count > MAX_EXTRACTED_FILES:
+                raise HTTPException(400, "Archive contains too many files (limit: 10,000)")
+
+            total_size += member.file_size
+            if total_size > MAX_EXTRACTED_SIZE_BYTES:
+                raise HTTPException(400, "Extracted archive exceeds size limit (500 MB)")
+
+            # Path traversal check
+            dest_path = (extract_dir / member.filename).resolve()
+            if not str(dest_path).startswith(str(extract_dir.resolve())):
+                raise HTTPException(400, f"Dangerous path traversal detected in archive: {member.filename}")
+
+        zf.extractall(extract_dir)
+
+
+@router.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "QuantumShield AI API",
+        "version": "0.2.0",
+        "total_scans_in_memory": len(_SCANS),
+        "features": {
+            "pqc_migration_validation": True,
+            "cbom_cyclonedx_1_6": True,
+            "mosca_threat_assessment": True,
+            "git_clone_scanning": True,
+            "offline_advisor_fallback": True,
+        }
+    }
 
 
 @router.post("/scans/upload", response_model=ScanSummary)
@@ -104,26 +173,12 @@ async def upload_and_scan(
     quantum_threat_horizon_years: float = 10.0,
     classification_config: UploadFile | None = None,
 ):
-    """
-    Accepts either:
-      - a .zip of a source checkout (source code, certs, dependency manifests,
-        Dockerfiles/k8s manifests, and compiled binaries are all scanned)
-      - a .tar produced by `docker save`, for full container image scanning
-
-    Runs the complete scanner suite (crypto/secrets, certificates,
-    dependencies, HSM/cloud KMS, binaries) plus criticality/exposure/Mosca
-    classification on every finding.
-
-    Optionally accepts a `classification_config` JSON file (see
-    app/analysis/classification.py for the format) to override the default
-    business-criticality heuristics with an organization's real asset map.
-    """
     if not (file.filename.endswith(".zip") or file.filename.endswith(".tar")):
         raise HTTPException(400, "Only .zip (source) or .tar (docker save image) uploads are supported")
 
     mosca_config = MoscaConfig(quantum_threat_horizon_years=quantum_threat_horizon_years)
-
     class_config = None
+
     if classification_config is not None:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_cfg:
             tmp_cfg.write(await classification_config.read())
@@ -131,25 +186,73 @@ async def upload_and_scan(
         try:
             class_config = ClassificationConfig.from_json_file(tmp_cfg_path)
         except Exception as e:
-            raise HTTPException(400, f"Invalid classification_config file: {e}")
+            raise HTTPException(400, f"Invalid classification_config JSON file: {e}")
 
     with tempfile.TemporaryDirectory() as tmp:
         upload_path = Path(tmp) / file.filename
-        upload_path.write_bytes(await file.read())
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_SIZE_BYTES:
+            raise HTTPException(400, f"File size exceeds 100 MB limit (received {len(content) // (1024*1024)} MB)")
+        upload_path.write_bytes(content)
 
-        if file.filename.endswith(".tar"):
-            def _run(directory: str):
-                return run_full_scan(directory, class_config, mosca_config)
+        try:
+            if file.filename.endswith(".tar"):
+                def _run(directory: str):
+                    return run_full_scan(directory, class_config, mosca_config, skip_osv_lookup=True)
 
-            try:
                 findings, files_scanned, layer_count = scan_container_image(str(upload_path), _run)
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-        else:
-            extract_dir = Path(tmp) / "extracted"
-            shutil.unpack_archive(str(upload_path), str(extract_dir))
-            findings, files_scanned = run_full_scan(str(extract_dir), class_config, mosca_config)
+            else:
+                extract_dir = Path(tmp) / "extracted"
+                extract_dir.mkdir(parents=True, exist_ok=True)
+                _safe_unpack_zip(upload_path, extract_dir)
+                findings, files_scanned = run_full_scan(str(extract_dir), class_config, mosca_config, skip_osv_lookup=True)
 
+            summary = _summarize(findings, files_scanned, target_name)
+            _SCANS[summary.scan_id] = summary
+            return summary
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"Scanning execution failed: {str(e)}")
+
+
+@router.post("/scans/git", response_model=ScanSummary)
+async def scan_git_repository(req: GitScanRequest):
+    """
+    Clones a remote Git repository securely into an isolated temporary folder,
+    scans it, and removes the clone immediately. Does not execute code or hooks.
+    """
+    url = req.repo_url.strip()
+    # Basic URL format sanitization
+    if not (url.startswith("https://") or url.startswith("http://") or url.startswith("git@")):
+        raise HTTPException(400, "Invalid Git repository URL (must start with https://, http://, or git@)")
+
+    target_name = req.target_name or url.rstrip("/").split("/")[-1].replace(".git", "")
+    mosca_config = MoscaConfig(quantum_threat_horizon_years=req.quantum_threat_horizon_years)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        clone_dest = Path(tmp_dir) / "repo"
+        cmd = ["git", "clone", "--depth", "1"]
+        if req.branch:
+            cmd.extend(["--branch", req.branch])
+        cmd.extend([url, str(clone_dest)])
+
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env={"GIT_TERMINAL_PROMPT": "0"},  # Do not hang on auth prompt
+            )
+            if res.returncode != 0:
+                raise HTTPException(400, f"Git clone failed: {res.stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(408, "Git clone timed out after 120 seconds")
+        except FileNotFoundError:
+            raise HTTPException(500, "Git executable not found in server environment")
+
+        findings, files_scanned = run_full_scan(str(clone_dest), mosca_config=mosca_config, skip_osv_lookup=True)
         summary = _summarize(findings, files_scanned, target_name)
         _SCANS[summary.scan_id] = summary
         return summary
@@ -170,13 +273,15 @@ async def list_scans():
 
 @router.get("/scans/{scan_id}/cbom")
 async def scan_cbom(scan_id: str):
-    """Exports the scan's findings as a CycloneDX 1.6 Cryptographic Bill of
-    Materials (CBOM) — a standardized, machine-readable format, not a
-    bespoke JSON shape."""
+    """Exports scan findings as a standardized CycloneDX 1.6 CBOM JSON document."""
     scan = _SCANS.get(scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
-    return generate_cbom(scan)
+    cbom = generate_cbom(scan)
+    valid, errors = validate_cbom_structure(cbom)
+    if not valid:
+        raise HTTPException(500, f"CBOM validation failed: {errors}")
+    return cbom
 
 
 @router.post("/scans/{scan_id}/simulate", response_model=SimulateResponse)
@@ -220,10 +325,11 @@ async def simulate_fix(scan_id: str, req: SimulateRequest):
     }
 
     count = len(req.finding_ids)
-    if grade_change["from"] != grade_change["to"]:
-        grade_phrase = f"and change your grade from {grade_change['from']} to {grade_change['to']}"
-    else:
-        grade_phrase = f"and keep your grade at {grade_change['from']}"
+    grade_phrase = (
+        f"and change your grade from {grade_change['from']} to {grade_change['to']}"
+        if grade_change["from"] != grade_change["to"]
+        else f"and keep your grade at {grade_change['from']}"
+    )
 
     summary_statement = (
         f"Fixing these {count} finding{'s' if count != 1 else ''} would raise Overall Health "
@@ -248,241 +354,48 @@ async def simulate_fix(scan_id: str, req: SimulateRequest):
     )
 
 
-@router.get("/scans/{scan_id}/findings/{finding_id}/related")
-async def get_related_findings(scan_id: str, finding_id: str):
+@router.get("/scans/{scan_id}/reports/{report_type}")
+async def get_report(scan_id: str, report_type: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+
+    if report_type == "executive":
+        content = generate_executive_report(scan)
+    elif report_type == "technical":
+        content = generate_technical_report(scan)
+    elif report_type == "checklist":
+        content = generate_migration_checklist(scan)
+    else:
+        raise HTTPException(400, "Unknown report type (supported: executive, technical, checklist)")
+
+    return {"report_type": report_type, "scan_id": scan_id, "markdown": content}
+
+
+@router.post("/advisor/explain")
+async def explain(finding_id: str, scan_id: str):
     scan = _SCANS.get(scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
     finding = next((f for f in scan.findings if f.id == finding_id), None)
     if not finding:
         raise HTTPException(404, "Finding not found")
-
-    related = find_related_findings(finding, scan.findings)
-    return {
-        "finding_id": finding_id,
-        "finding_title": finding.title,
-        "related_findings": related,
-        "disclaimer": DISCLAIMER_TEXT,
-    }
-
-async def explain(scan_id: str, finding_id: str):
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    finding = next((f for f in scan.findings if f.id == finding_id), None)
-    if not finding:
-        raise HTTPException(404, "Finding not found")
-    explanation = await explain_finding(finding)
-    return {"finding_id": finding_id, "explanation": explanation}
+    return {"explanation": await explain_finding(finding)}
 
 
-@router.get("/scans/{scan_id}/roadmap")
+@router.post("/advisor/roadmap")
 async def roadmap(scan_id: str):
     scan = _SCANS.get(scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
-    text = await generate_migration_roadmap(scan.findings)
-    return {"scan_id": scan_id, "roadmap": text}
+    return {"roadmap": await generate_migration_roadmap(scan.findings)}
 
 
-@router.post("/copilot/chat")
-async def copilot_chat(req: ChatRequest):
+@router.post("/advisor/chat")
+async def chat(req: ChatRequest):
     scan = _SCANS.get(req.scan_id)
     if not scan:
         raise HTTPException(404, "Scan not found")
-    context = {
-        "target_name": scan.target_name,
-        "scores": scan.scores.model_dump(),
-        "total_findings": scan.total_findings,
-        "findings_by_severity": scan.findings_by_severity,
-        "findings_by_category": scan.findings_by_category,
-        "top_findings": [f.model_dump() for f in scan.findings[:15]],
-    }
+    context = scan.model_dump()
     answer = await chat_with_advisor(req.question, context)
     return {"answer": answer}
-
-
-@router.get("/scans/{scan_id}/reports/executive")
-async def report_executive(scan_id: str):
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return {"scan_id": scan_id, "format": "markdown", "content": generate_executive_report(scan)}
-
-
-@router.get("/scans/{scan_id}/reports/technical")
-async def report_technical(scan_id: str):
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return {"scan_id": scan_id, "format": "markdown", "content": generate_technical_report(scan)}
-
-
-@router.get("/scans/{scan_id}/reports/migration-checklist")
-async def report_migration_checklist(scan_id: str):
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return {"scan_id": scan_id, "format": "markdown", "content": generate_migration_checklist(scan)}
-
-
-# ==========================================================================
-# v0.2.0 — New analytical endpoints (lazy, cached on ScanSummary)
-# ==========================================================================
-
-def _ensure_graph(scan: ScanSummary):
-    """Lazily build and cache the dependency graph."""
-    if scan.dependency_graph is None:
-        scan.dependency_graph = build_crypto_dependency_graph(scan.findings)
-    return scan.dependency_graph
-
-
-def _ensure_agility(scan: ScanSummary):
-    if scan.agility is None:
-        scan.agility = compute_agility_score(scan.findings)
-    return scan.agility
-
-
-def _ensure_blast_radii(scan: ScanSummary):
-    if scan.blast_radii is None:
-        graph = _ensure_graph(scan)
-        scan.blast_radii = compute_blast_radii(scan.findings, graph)
-    return scan.blast_radii
-
-
-def _ensure_pqc_validations(scan: ScanSummary):
-    if scan.pqc_validations is None:
-        scan.pqc_validations = validate_pqc_migrations(scan.findings)
-    return scan.pqc_validations
-
-
-def _ensure_remediation(scan: ScanSummary):
-    if scan.remediation_plan is None:
-        blast = _ensure_blast_radii(scan)
-        vals = _ensure_pqc_validations(scan)
-        agility = _ensure_agility(scan)
-        scan.remediation_plan = build_remediation_plan(scan.findings, blast, vals, agility)
-    return scan.remediation_plan
-
-
-def _ensure_tickets(scan: ScanSummary):
-    if scan.tickets is None:
-        blast = _ensure_blast_radii(scan)
-        vals = _ensure_pqc_validations(scan)
-        plan = _ensure_remediation(scan)
-        scan.tickets = generate_tickets(scan.findings, blast, vals, plan)
-    return scan.tickets
-
-
-def _ensure_cicd_policy(scan: ScanSummary):
-    if scan.cicd_policy_results is None:
-        results, _ = run_cicd_scan.__module__ and None, None  # avoid re-scan; use existing findings
-        # Apply policy logic directly to already-scanned findings
-        from app.cicd.cicd_scanner import apply_policy, CICDAction
-        from app.models.schemas import CICDPolicyResult
-        policy_results = []
-        for f in scan.findings:
-            action, rule_desc = apply_policy(f, DEFAULT_POLICY)
-            if action == CICDAction.ALLOW:
-                continue  # Only surface BLOCK and WARN in the UI
-            msg = (
-                f"{'BLOCKED' if action == CICDAction.BLOCK else 'WARNING'} by "
-                f"policy rule '{rule_desc}': {f.title}"
-            )
-            policy_results.append(CICDPolicyResult(
-                file_path=f.file_path,
-                finding_id=f.id,
-                finding_title=f.title,
-                severity=f.severity.value,
-                action=action,
-                policy_rule=rule_desc,
-                message=msg,
-            ))
-        scan.cicd_policy_results = policy_results
-    return scan.cicd_policy_results
-
-
-@router.get("/scans/{scan_id}/dependency-graph")
-async def scan_dependency_graph(scan_id: str):
-    """Returns the crypto dependency graph for the scan (nodes + edges).
-    All edges are heuristically inferred from static analysis."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_graph(scan)
-
-
-@router.get("/scans/{scan_id}/agility")
-async def scan_agility(scan_id: str):
-    """Returns the crypto-agility difficulty score with per-factor breakdown."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_agility(scan)
-
-
-@router.get("/scans/{scan_id}/blast-radius")
-async def scan_blast_radius(scan_id: str):
-    """Returns migration blast radius for each finding: direct + indirect dependencies + rating."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_blast_radii(scan)
-
-
-@router.get("/scans/{scan_id}/pqc-validation")
-async def scan_pqc_validation(scan_id: str):
-    """Validates each finding's PQC migration feasibility: VALID / PARTIALLY_SUPPORTED / BLOCKED."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_pqc_validations(scan)
-
-
-@router.get("/scans/{scan_id}/remediation")
-async def scan_remediation(scan_id: str):
-    """Returns a dynamically generated 3-phase remediation plan from actual findings."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_remediation(scan)
-
-
-@router.get("/scans/{scan_id}/tickets")
-async def scan_tickets(scan_id: str):
-    """Returns structured migration tickets for all CRITICAL/HIGH findings."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_tickets(scan)
-
-
-@router.post("/scans/{scan_id}/tickets/export")
-async def export_tickets(scan_id: str, fmt: str = "json"):
-    """Export all migration tickets as JSON (default) or Markdown.
-    fmt: 'json' (default) | 'markdown'
-    """
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    tickets = _ensure_tickets(scan)
-    if fmt == "markdown":
-        content = "\n\n---\n\n".join(ticket_to_markdown(t) for t in tickets)
-        return {"scan_id": scan_id, "format": "markdown", "content": content}
-    return {"scan_id": scan_id, "format": "json", "tickets": [ticket_to_dict(t) for t in tickets]}
-
-
-@router.get("/scans/{scan_id}/cicd-policy")
-async def scan_cicd_policy(scan_id: str):
-    """Applies the default CI/CD security gate policy to this scan's findings.
-    Returns BLOCK and WARN results; ALLOW results are omitted for brevity."""
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return _ensure_cicd_policy(scan)
-
-
-@router.get("/health")
-async def health():
-    return {"status": "ok", "service": "quantumshield-ai-backend"}
-
