@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     jwt_secret: str = os.environ.get("JWT_SECRET", "change-me-in-production")
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: list[str] = ["*"]
 
     class Config:
         env_file = ".env"
