@@ -57,9 +57,9 @@ router = APIRouter()
 _SCANS: dict[str, ScanSummary] = {}
 
 # Safety thresholds for uploads
-MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024       # 100 MB archive limit
-MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024    # 500 MB unpacked limit (decompression bomb protection)
-MAX_EXTRACTED_FILES = 10000                     # Max files in archive
+MAX_UPLOAD_SIZE_BYTES = 250 * 1024 * 1024       # 250 MB archive limit
+MAX_EXTRACTED_SIZE_BYTES = 1024 * 1024 * 1024   # 1 GB unpacked limit
+MAX_EXTRACTED_FILES = 150000                    # 150,000 files max
 
 
 class GitScanRequest(BaseModel):
@@ -126,27 +126,36 @@ def _summarize(findings: list, files_scanned: int, target_name: str) -> ScanSumm
     )
 
 
+SKIP_EXTRACT_DIRS = {"node_modules", ".git", "venv", ".venv", "__pycache__", "dist", "build", ".next"}
+
+
 def _safe_unpack_zip(zip_path: Path, extract_dir: Path):
     """Safely extracts ZIP with path traversal and decompression bomb guards."""
     total_size = 0
     file_count = 0
 
     with zipfile.ZipFile(zip_path, "r") as zf:
-        for member in zf.infolist():
-            file_count += 1
-            if file_count > MAX_EXTRACTED_FILES:
-                raise HTTPException(400, "Archive contains too many files (limit: 10,000)")
+        members = zf.infolist()
+        if len(members) > MAX_EXTRACTED_FILES:
+            raise HTTPException(400, f"Archive contains too many files ({len(members):,} files, limit: {MAX_EXTRACTED_FILES:,})")
 
-            total_size += member.file_size
-            if total_size > MAX_EXTRACTED_SIZE_BYTES:
-                raise HTTPException(400, "Extracted archive exceeds size limit (500 MB)")
-
+        for member in members:
             # Path traversal check
             dest_path = (extract_dir / member.filename).resolve()
             if not str(dest_path).startswith(str(extract_dir.resolve())):
                 raise HTTPException(400, f"Dangerous path traversal detected in archive: {member.filename}")
 
-        zf.extractall(extract_dir)
+            # Ignore heavy non-source directories to ensure fast extraction
+            parts = Path(member.filename).parts
+            if any(p in SKIP_EXTRACT_DIRS for p in parts):
+                continue
+
+            file_count += 1
+            total_size += member.file_size
+            if total_size > MAX_EXTRACTED_SIZE_BYTES:
+                raise HTTPException(400, "Extracted source files exceed size limit (1 GB)")
+
+            zf.extract(member, extract_dir)
 
 
 @router.get("/health")
