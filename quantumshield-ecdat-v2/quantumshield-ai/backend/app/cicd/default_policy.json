@@ -1,0 +1,34 @@
+{
+    "rules": [
+        {
+            "severity": "critical",
+            "action": "BLOCK",
+            "comment": "Any critical finding will fail the pipeline"
+        },
+        {
+            "category": "secret",
+            "action": "BLOCK",
+            "comment": "Committed secrets always block the pipeline"
+        },
+        {
+            "severity": "high",
+            "action": "WARN",
+            "comment": "High-severity findings produce warnings but do not block"
+        },
+        {
+            "category": "quantum_vulnerable_crypto",
+            "action": "WARN",
+            "comment": "Quantum-vulnerable crypto: warn for awareness, block when migration complete"
+        }
+    ],
+    "exceptions": [
+        {
+            "file_path": "tests/",
+            "reason": "Test fixtures may use weak crypto for testing purposes"
+        },
+        {
+            "file_path": "docs/",
+            "reason": "Documentation examples"
+        }
+    ]
+}

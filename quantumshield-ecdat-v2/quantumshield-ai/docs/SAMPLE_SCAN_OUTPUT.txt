@@ -1,0 +1,39 @@
+QuantumShield AI — Scan Report
+Target: demo_target (sample vulnerable repo)
+Files scanned: 4
+Total findings: 13
+----------------------------------------------------------------------
+[HIGH    ] CS-TLS-001       config/tls.conf:1
+           Legacy TLS/SSL protocol version allowed
+[HIGH    ] CS-TLS-001       config/tls.conf:1
+           Legacy TLS/SSL protocol version allowed
+[CRITICAL] SEC-PRIVKEY-001  config/service_account.pem:1
+           Private key material committed to repository
+[HIGH    ] QC-RSA-001       auth/jwt_utils.py:5
+           RSA key generation / RSA-based signing detected
+[CRITICAL] AUTH-JWT-001     auth/jwt_utils.py:7
+           JWT configured to accept 'none' algorithm
+[CRITICAL] SEC-AWS-001      auth/jwt_utils.py:10
+           Hardcoded AWS Access Key ID
+[HIGH    ] SEC-GENERIC-001  auth/jwt_utils.py:11
+           Likely hardcoded credential or API key
+[HIGH    ] QC-RSA-001       crypto/keys.py:6
+           RSA key generation / RSA-based signing detected
+[HIGH    ] QC-ECC-001       crypto/keys.py:9
+           Elliptic-curve cryptography (ECC/ECDSA/ECDH) detected
+[HIGH    ] QC-ECC-001       crypto/keys.py:10
+           Elliptic-curve cryptography (ECC/ECDSA/ECDH) detected
+[HIGH    ] QC-ECC-001       crypto/keys.py:10
+           Elliptic-curve cryptography (ECC/ECDSA/ECDH) detected
+[MEDIUM  ] CS-SHA1-001      crypto/keys.py:16
+           SHA-1 hash function in use
+[HIGH    ] CS-MD5-001       crypto/keys.py:13
+           MD5 hash function in use
+----------------------------------------------------------------------
+security_score: 64.2
+quantum_readiness_score: 77.1
+criticality_score: 7.7
+compliance_score: 65.4
+overall_health: 62.7
+risk_trend: stable
+grade: D
