@@ -369,16 +369,114 @@ async def get_report(scan_id: str, report_type: str):
     if not scan:
         raise HTTPException(404, "Scan not found")
 
-    if report_type == "executive":
+    rtype = report_type.lower()
+    if rtype == "executive":
         content = generate_executive_report(scan)
-    elif report_type == "technical":
+    elif rtype in ("technical", "technical-findings"):
         content = generate_technical_report(scan)
-    elif report_type == "checklist":
+    elif rtype in ("checklist", "migration-checklist", "migration_checklist"):
         content = generate_migration_checklist(scan)
     else:
-        raise HTTPException(400, "Unknown report type (supported: executive, technical, checklist)")
+        raise HTTPException(400, "Unknown report type (supported: executive, technical, migration-checklist)")
 
-    return {"report_type": report_type, "scan_id": scan_id, "markdown": content}
+    return {"report_type": report_type, "scan_id": scan_id, "markdown": content, "content": content}
+
+
+@router.get("/scans/{scan_id}/dependency-graph")
+async def get_dependency_graph(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.dependency_graph:
+        return scan.dependency_graph
+    return build_crypto_dependency_graph(scan.findings)
+
+
+@router.get("/scans/{scan_id}/agility")
+async def get_agility_score(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.agility:
+        return scan.agility
+    return compute_agility_score(scan.findings)
+
+
+@router.get("/scans/{scan_id}/blast-radius")
+async def get_blast_radius(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.blast_radii:
+        return scan.blast_radii
+    graph = scan.dependency_graph or build_crypto_dependency_graph(scan.findings)
+    return compute_blast_radii(scan.findings, graph)
+
+
+@router.get("/scans/{scan_id}/pqc-validation")
+async def get_pqc_validation(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.pqc_validations:
+        return scan.pqc_validations
+    return validate_pqc_migrations(scan.findings)
+
+
+@router.get("/scans/{scan_id}/remediation")
+async def get_remediation_plan(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.remediation_plan:
+        return scan.remediation_plan
+    graph = scan.dependency_graph or build_crypto_dependency_graph(scan.findings)
+    blast = scan.blast_radii or compute_blast_radii(scan.findings, graph)
+    pqc = scan.pqc_validations or validate_pqc_migrations(scan.findings)
+    return build_remediation_plan(scan.findings, blast, pqc)
+
+
+@router.get("/scans/{scan_id}/tickets")
+async def get_tickets(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if scan.tickets:
+        return scan.tickets
+    graph = scan.dependency_graph or build_crypto_dependency_graph(scan.findings)
+    blast = scan.blast_radii or compute_blast_radii(scan.findings, graph)
+    pqc = scan.pqc_validations or validate_pqc_migrations(scan.findings)
+    return generate_tickets(scan.findings, blast, pqc)
+
+
+@router.post("/scans/{scan_id}/tickets/export")
+async def export_tickets(scan_id: str, fmt: str = "jira"):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    tickets = scan.tickets or generate_tickets(scan.findings, scan.blast_radii or [], scan.pqc_validations or [])
+    if fmt == "markdown":
+        md = "\n\n---\n\n".join(ticket_to_markdown(t) for t in tickets)
+        return {"format": "markdown", "content": md}
+    data = [ticket_to_dict(t) for t in tickets]
+    return {"format": "jira", "tickets": data}
+
+
+@router.get("/scans/{scan_id}/cicd-policy")
+async def get_cicd_policy(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    return {"policy": DEFAULT_POLICY, "findings_count": len(scan.findings)}
+
+
+@router.get("/scans/{scan_id}/roadmap")
+@router.post("/advisor/roadmap")
+async def roadmap(scan_id: str):
+    scan = _SCANS.get(scan_id)
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    return {"roadmap": await generate_migration_roadmap(scan.findings), "content": await generate_migration_roadmap(scan.findings)}
 
 
 @router.post("/advisor/explain")
@@ -392,14 +490,7 @@ async def explain(finding_id: str, scan_id: str):
     return {"explanation": await explain_finding(finding)}
 
 
-@router.post("/advisor/roadmap")
-async def roadmap(scan_id: str):
-    scan = _SCANS.get(scan_id)
-    if not scan:
-        raise HTTPException(404, "Scan not found")
-    return {"roadmap": await generate_migration_roadmap(scan.findings)}
-
-
+@router.post("/copilot/chat")
 @router.post("/advisor/chat")
 async def chat(req: ChatRequest):
     scan = _SCANS.get(req.scan_id)
@@ -407,4 +498,4 @@ async def chat(req: ChatRequest):
         raise HTTPException(404, "Scan not found")
     context = scan.model_dump()
     answer = await chat_with_advisor(req.question, context)
-    return {"answer": answer}
+    return {"answer": answer, "reply": answer}

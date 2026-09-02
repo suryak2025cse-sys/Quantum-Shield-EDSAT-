@@ -709,7 +709,8 @@ function InventoryPage({ scan, findings, apiBase, selectedForSimulation, onToggl
     setExporting(true);
     setExportError(null);
     try {
-      const res = await fetch(`${apiBase}/scans/${scan.scan_id}/cbom`);
+      const base = normalizeApiBase(apiBase);
+      const res = await fetch(`${base}/scans/${scan.scan_id}/cbom`);
       if (!res.ok) throw new Error(await res.text());
       const cbom = await res.json();
       const blob = new Blob([JSON.stringify(cbom, null, 2)], { type: "application/json" });
@@ -892,10 +893,11 @@ function ReportsPage({ scan, apiBase }) {
     setLoading(true);
     setContent("");
     try {
-      const res = await fetch(`${apiBase}/scans/${scan.scan_id}/reports/${key}`);
+      const base = normalizeApiBase(apiBase);
+      const res = await fetch(`${base}/scans/${scan.scan_id}/reports/${key}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setContent(data.content);
+      setContent(data.content || data.markdown || "");
     } catch (e) {
       setContent(`Couldn't generate this report: ${e.message}`);
     } finally {
@@ -969,14 +971,15 @@ function CopilotPage({ scan, apiBase }) {
     setInput("");
     setSending(true);
     try {
-      const res = await fetch(`${apiBase}/copilot/chat`, {
+      const base = normalizeApiBase(apiBase);
+      const res = await fetch(`${base}/copilot/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scan_id: scan.scan_id, question: q }),
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
-      setMessages((m) => [...m, { role: "assistant", text: data.answer }]);
+      setMessages((m) => [...m, { role: "assistant", text: data.answer || data.reply }]);
     } catch {
       setMessages((m) => [...m, { role: "assistant", text: "I couldn't reach the AI advisor. This needs ANTHROPIC_API_KEY set on the backend — the scan data itself is fine, just the AI layer isn't configured." }]);
     } finally {
@@ -1011,19 +1014,30 @@ function CopilotPage({ scan, apiBase }) {
 ------------------------------------------------------------------------- */
 
 function DependencyGraphPage({ scan, apiBase }) {
-  const [graph, setGraph] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [graph, setGraph] = useState(scan?.dependency_graph || null);
+  const [loading, setLoading] = useState(!scan?.dependency_graph);
   const [selectedNode, setSelectedNode] = useState(null);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/dependency-graph`)
+    if (scan?.dependency_graph && scan.dependency_graph.nodes?.length) {
+      setGraph(scan.dependency_graph);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/dependency-graph`)
       .then((r) => r.json())
-      .then((d) => { setGraph(d); setLoading(false); })
+      .then((d) => {
+        if (d && Array.isArray(d.nodes)) setGraph(d);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
+  }, [scan.scan_id, scan.dependency_graph, apiBase]);
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Loading graph…</div>;
-  if (!graph || !graph.nodes?.length) return <Panel title="Dependency Graph"><p className="text-[12px]" style={{ color: C.textFaint }}>No graph nodes available.</p></Panel>;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  if (nodes.length === 0) return <Panel title="Dependency Graph"><p className="text-[12px]" style={{ color: C.textFaint }}>No graph nodes available.</p></Panel>;
 
   const NODE_COLORS = {
     algorithm: "#EF4444", key: "#F59E0B", certificate: "#3B82F6",
@@ -1034,7 +1048,7 @@ function DependencyGraphPage({ scan, apiBase }) {
     <div className="flex flex-col gap-4">
       <Panel title="Crypto Dependency Graph" description="Graph map of algorithms, keys, certificates, services, libraries, and files.">
         <p className="text-[11px] mb-3 p-2 rounded" style={{ background: C.cardBg, border: `1px solid ${C.border}`, color: C.textFaint }}>
-          ℹ️ {graph.note || "Relationships are heuristically derived from static analysis."}
+          ℹ️ {graph?.note || "Relationships are heuristically derived from static analysis."}
         </p>
 
         <div className="grid grid-cols-12 gap-4">
@@ -1045,12 +1059,11 @@ function DependencyGraphPage({ scan, apiBase }) {
                   <path d="M 0 0 L 10 5 L 0 10 z" fill={C.border} />
                 </marker>
               </defs>
-              {/* Render edges */}
-              {graph.edges.map((e, idx) => {
-                const srcIdx = graph.nodes.findIndex((n) => n.id === e.source);
-                const tgtIdx = graph.nodes.findIndex((n) => n.id === e.target);
+              {edges.map((e, idx) => {
+                const srcIdx = nodes.findIndex((n) => n.id === e.source);
+                const tgtIdx = nodes.findIndex((n) => n.id === e.target);
                 if (srcIdx === -1 || tgtIdx === -1) return null;
-                const total = graph.nodes.length;
+                const total = nodes.length;
                 const x1 = 300 + 200 * Math.cos((2 * Math.PI * srcIdx) / total);
                 const y1 = 190 + 140 * Math.sin((2 * Math.PI * srcIdx) / total);
                 const x2 = 300 + 200 * Math.cos((2 * Math.PI * tgtIdx) / total);
@@ -1061,9 +1074,8 @@ function DependencyGraphPage({ scan, apiBase }) {
                   </g>
                 );
               })}
-              {/* Render nodes */}
-              {graph.nodes.map((n, idx) => {
-                const total = graph.nodes.length;
+              {nodes.map((n, idx) => {
+                const total = nodes.length;
                 const cx = 300 + 200 * Math.cos((2 * Math.PI * idx) / total);
                 const cy = 190 + 140 * Math.sin((2 * Math.PI * idx) / total);
                 const isSelected = selectedNode?.id === n.id;
@@ -1081,29 +1093,27 @@ function DependencyGraphPage({ scan, apiBase }) {
           </div>
 
           <div className="col-span-4 flex flex-col gap-3">
-            <Panel title="Node Details">
-              {selectedNode ? (
-                <div className="flex flex-col gap-2 text-[12px]">
-                  <div><span style={{ color: C.textFaint }}>Type:</span> <span className="font-mono uppercase" style={{ color: NODE_COLORS[selectedNode.node_type] }}>{selectedNode.node_type}</span></div>
-                  <div><span style={{ color: C.textFaint }}>Label:</span> <p className="font-medium" style={{ color: C.text }}>{selectedNode.label}</p></div>
-                  {selectedNode.severity && <div><span style={{ color: C.textFaint }}>Severity:</span> <span className="font-mono uppercase">{selectedNode.severity}</span></div>}
-                  {selectedNode.mosca_risk && <div><span style={{ color: C.textFaint }}>Mosca Risk:</span> <span className="font-mono">{selectedNode.mosca_risk}</span></div>}
-                  {selectedNode.finding_ids?.length > 0 && <div><span style={{ color: C.textFaint }}>Associated Findings:</span> <p className="font-mono text-[10px]">{selectedNode.finding_ids.join(", ")}</p></div>}
-                </div>
-              ) : (
-                <p className="text-[12px]" style={{ color: C.textFaint }}>Click any node on the graph to view its details.</p>
-              )}
-            </Panel>
-
-            <Panel title="Legend">
-              <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+            <Panel title="Node Legend" style={{ padding: "12px" }}>
+              <div className="flex flex-wrap gap-2 text-[11px]">
                 {Object.entries(NODE_COLORS).map(([type, color]) => (
                   <div key={type} className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: color }} />
                     <span className="capitalize" style={{ color: C.textMuted }}>{type}</span>
                   </div>
                 ))}
               </div>
+            </Panel>
+
+            <Panel title="Selected Node Detail" style={{ padding: "12px", minHeight: "220px" }}>
+              {selectedNode ? (
+                <div className="flex flex-col gap-2 text-[12px]">
+                  <p className="font-semibold" style={{ color: C.text }}>{selectedNode.label}</p>
+                  <p style={{ color: C.textFaint }}>Type: <strong style={{ color: C.text }}>{selectedNode.node_type}</strong></p>
+                  {selectedNode.path && <p className="font-mono text-[11px]" style={{ color: C.textMuted }}>{selectedNode.path}</p>}
+                </div>
+              ) : (
+                <p className="text-[12px]" style={{ color: C.textFaint }}>Click any node in the graph to view details.</p>
+              )}
             </Panel>
           </div>
         </div>
@@ -1113,29 +1123,40 @@ function DependencyGraphPage({ scan, apiBase }) {
 }
 
 function AgilityPage({ scan, apiBase }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(scan?.agility || null);
+  const [loading, setLoading] = useState(!scan?.agility);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/agility`)
+    if (scan?.agility) {
+      setData(scan.agility);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/agility`)
       .then((r) => r.json())
-      .then((d) => { setData(d); setLoading(false); })
+      .then((d) => {
+        if (d && typeof d.score === "number") setData(d);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
+  }, [scan.scan_id, scan.agility, apiBase]);
 
-  if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Loading agility score…</div>;
-  if (!data) return <Panel title="Crypto-Agility Score"><p className="text-[12px]" style={{ color: C.textFaint }}>No agility data available.</p></Panel>;
+  if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Computing agility score…</div>;
+  if (!data) return <Panel title="Cryptographic Agility Score"><p className="text-[12px]" style={{ color: C.textFaint }}>No agility data available.</p></Panel>;
 
-  const LABEL_COLOR = { Easy: C.low, Moderate: C.medium, Difficult: C.critical };
+  const factors = Array.isArray(data?.factors) ? data.factors : [];
 
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-12 gap-4">
-        <Panel style={{ gridColumn: "span 4" }} title="Crypto-Agility Difficulty">
-          <div className="flex flex-col items-center py-4">
-            <p className="text-[48px] font-extrabold" style={{ color: LABEL_COLOR[data.label], fontFamily: MONO }}>{data.score}</p>
-            <span className="px-3 py-1 rounded text-[13px] font-semibold uppercase tracking-wider" style={{ background: `${LABEL_COLOR[data.label]}20`, color: LABEL_COLOR[data.label] }}>
-              {data.label}
+        <Panel style={{ gridColumn: "span 4" }} title="Crypto Agility Score" description="Measures how hard it will be to swap cryptography out.">
+          <div className="flex flex-col items-center justify-center p-4">
+            <span className="text-4xl font-bold font-mono" style={{ color: data.score > 60 ? C.critical : data.score > 35 ? C.medium : C.low }}>
+              {data.score}
+            </span>
+            <span className="text-[13px] font-semibold mt-1" style={{ color: C.text }}>
+              Rating: {data.grade || "C"}
             </span>
             <p className="text-[11px] mt-3 text-center" style={{ color: C.textFaint }}>
               Score from 0 (easy to migrate) to 100 (extremely hard).
@@ -1144,15 +1165,15 @@ function AgilityPage({ scan, apiBase }) {
         </Panel>
 
         <Panel style={{ gridColumn: "span 8" }} title="Analysis Rationale" description="Explainable breakdown of factors driving the score.">
-          <ReactMarkdown className="prose text-[13px] leading-relaxed" style={{ color: C.text }}>
-            {data.explanation}
-          </ReactMarkdown>
+          <div className="text-[13px] leading-relaxed" style={{ color: C.text }}>
+            <Markdown>{data.explanation || "No explanation available."}</Markdown>
+          </div>
         </Panel>
       </div>
 
       <Panel title="Scoring Factor Breakdown" description="Detailed contribution of each code analysis factor.">
         <div className="flex flex-col gap-3">
-          {data.factors?.map((f) => (
+          {factors.map((f) => (
             <div key={f.name} className="p-3 rounded flex flex-col gap-1" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[12px] font-semibold" style={{ color: C.accent }}>{f.name}</span>
@@ -1170,29 +1191,39 @@ function AgilityPage({ scan, apiBase }) {
 }
 
 function BlastRadiusPage({ scan, apiBase }) {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(scan?.blast_radii || []);
+  const [loading, setLoading] = useState(!scan?.blast_radii);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/blast-radius`)
+    if (scan?.blast_radii && scan.blast_radii.length > 0) {
+      setData(scan.blast_radii);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/blast-radius`)
       .then((r) => r.json())
-      .then((d) => { setData(d); setLoading(false); })
+      .then((d) => {
+        if (Array.isArray(d)) setData(d);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
+  }, [scan.scan_id, scan.blast_radii, apiBase]);
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Computing blast radius…</div>;
 
   const RATING_COLOR = { Low: C.low, Medium: C.medium, High: C.critical };
+  const items = Array.isArray(data) ? data : [];
 
   return (
     <div className="flex flex-col gap-4">
       <Panel title="Migration Blast Radius" description="Impact radius of migrating each cryptographic asset.">
         <div className="flex flex-col gap-3">
-          {data.map((item) => (
+          {items.map((item) => (
             <div key={item.finding_id} className="p-3.5 rounded flex flex-col gap-2" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
               <div className="flex items-center justify-between">
                 <p className="text-[13px] font-semibold" style={{ color: C.text }}>{item.finding_title}</p>
-                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${RATING_COLOR[item.rating]}20`, color: RATING_COLOR[item.rating] }}>
+                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${RATING_COLOR[item.rating] || C.textMuted}20`, color: RATING_COLOR[item.rating] || C.textMuted }}>
                   {item.rating} BLAST
                 </span>
               </div>
@@ -1211,31 +1242,41 @@ function BlastRadiusPage({ scan, apiBase }) {
 }
 
 function ValidationPage({ scan, apiBase }) {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(scan?.pqc_validations || []);
+  const [loading, setLoading] = useState(!scan?.pqc_validations);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/pqc-validation`)
+    if (scan?.pqc_validations && scan.pqc_validations.length > 0) {
+      setData(scan.pqc_validations);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/pqc-validation`)
       .then((r) => r.json())
-      .then((d) => { setData(d); setLoading(false); })
+      .then((d) => {
+        if (Array.isArray(d)) setData(d);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
+  }, [scan.scan_id, scan.pqc_validations, apiBase]);
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Validating PQC feasibility…</div>;
 
   const STATUS_COLOR = {
     VALID: C.low, PARTIALLY_SUPPORTED: C.medium, BLOCKED: C.critical, NOT_APPLICABLE: C.textFaint,
   };
+  const list = Array.isArray(data) ? data : [];
 
   return (
     <div className="flex flex-col gap-4">
       <Panel title="PQC / Hybrid Migration Validation" description="Feasibility assessment against current NIST standards and library roadmaps.">
         <div className="flex flex-col gap-3">
-          {data.map((v) => (
+          {list.map((v) => (
             <div key={v.finding_id} className="p-3.5 rounded flex flex-col gap-2" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
               <div className="flex items-center justify-between">
                 <p className="text-[13px] font-semibold" style={{ color: C.text }}>{v.finding_title}</p>
-                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${STATUS_COLOR[v.status]}20`, color: STATUS_COLOR[v.status] }}>
+                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold" style={{ background: `${STATUS_COLOR[v.status] || C.textMuted}20`, color: STATUS_COLOR[v.status] || C.textMuted }}>
                   {v.status}
                 </span>
               </div>
@@ -1266,24 +1307,35 @@ function ValidationPage({ scan, apiBase }) {
 }
 
 function RemediationPage({ scan, apiBase }) {
-  const [plan, setPlan] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [plan, setPlan] = useState(scan?.remediation_plan || null);
+  const [loading, setLoading] = useState(!scan?.remediation_plan);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/remediation`)
+    if (scan?.remediation_plan) {
+      setPlan(scan.remediation_plan);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/remediation`)
       .then((r) => r.json())
-      .then((d) => { setPlan(d); setLoading(false); })
+      .then((d) => {
+        if (d && Array.isArray(d.phases)) setPlan(d);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
+  }, [scan.scan_id, scan.remediation_plan, apiBase]);
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Generating remediation plan…</div>;
   if (!plan) return <Panel title="Phased Remediation Plan"><p className="text-[12px]" style={{ color: C.textFaint }}>No remediation plan available.</p></Panel>;
 
+  const phases = Array.isArray(plan?.phases) ? plan.phases : [];
+
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="Phased Migration Plan" description={`3-phase roadmap covering ${plan.total_findings_addressed} finding(s) (~${plan.total_effort_hours} total effort hours).`}>
+      <Panel title="Phased Migration Plan" description={`3-phase roadmap covering ${plan.total_findings_addressed || 0} finding(s) (~${plan.total_effort_hours || 0} total effort hours).`}>
         <div className="flex flex-col gap-6 mt-2">
-          {plan.phases?.map((p) => (
+          {phases.map((p) => (
             <div key={p.phase_number} className="flex flex-col gap-2">
               <div className="flex items-center justify-between pb-1" style={{ borderBottom: `1px solid ${C.border}` }}>
                 <h4 className="text-[14px] font-bold" style={{ color: C.accent }}>
@@ -1293,7 +1345,7 @@ function RemediationPage({ scan, apiBase }) {
               </div>
               <p className="text-[12px]" style={{ color: C.textFaint }}>{p.description}</p>
               <div className="flex flex-col gap-2 mt-1">
-                {p.items?.map((item) => (
+                {(p.items || []).map((item) => (
                   <div key={item.finding_id} className="p-3 rounded text-[12px]" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-semibold" style={{ color: C.text }}>#{item.priority} {item.finding_title}</span>
@@ -1312,21 +1364,31 @@ function RemediationPage({ scan, apiBase }) {
 }
 
 function TicketsPage({ scan, apiBase }) {
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [tickets, setTickets] = useState(scan?.tickets || []);
+  const [loading, setLoading] = useState(!scan?.tickets);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/tickets`)
-      .then((r) => r.json())
-      .then((d) => { setTickets(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [scan.scan_id, apiBase]);
-
-  const handleExport = (fmt) => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/tickets/export?fmt=${fmt}`, { method: "POST" })
+    if (scan?.tickets && scan.tickets.length > 0) {
+      setTickets(scan.tickets);
+      setLoading(false);
+      return;
+    }
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/tickets`)
       .then((r) => r.json())
       .then((d) => {
-        const text = fmt === "markdown" ? d.content : JSON.stringify(d.tickets, null, 2);
+        if (Array.isArray(d)) setTickets(d);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [scan.scan_id, scan.tickets, apiBase]);
+
+  const handleExport = (fmt) => {
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/tickets/export?fmt=${fmt}`, { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => {
+        const text = fmt === "markdown" ? (d.content || d.markdown) : JSON.stringify(d.tickets || d, null, 2);
         const blob = new Blob([text], { type: fmt === "markdown" ? "text/markdown" : "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -1337,6 +1399,7 @@ function TicketsPage({ scan, apiBase }) {
   };
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Generating migration tickets…</div>;
+  const list = Array.isArray(tickets) ? tickets : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -1351,7 +1414,7 @@ function TicketsPage({ scan, apiBase }) {
         </div>
 
         <div className="flex flex-col gap-3">
-          {tickets.map((t) => (
+          {list.map((t) => (
             <div key={t.ticket_id} className="p-3.5 rounded flex flex-col gap-2 text-[12px]" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1381,15 +1444,21 @@ function CICDPage({ scan, apiBase }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${apiBase}/scans/${scan.scan_id}/cicd-policy`)
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/cicd-policy`)
       .then((r) => r.json())
-      .then((d) => { setResults(d); setLoading(false); })
+      .then((d) => {
+        const list = Array.isArray(d) ? d : (Array.isArray(d?.results) ? d.results : []);
+        setResults(list);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, [scan.scan_id, apiBase]);
 
   if (loading) return <div className="p-8 text-center" style={{ color: C.textFaint }}><Loader2 className="animate-spin inline mr-2" size={16} /> Evaluating CI/CD gate policy…</div>;
 
-  const blockedCount = results.filter((r) => r.action === "BLOCK").length;
+  const list = Array.isArray(results) ? results : [];
+  const blockedCount = list.filter((r) => r.action === "BLOCK").length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -1406,7 +1475,7 @@ function CICDPage({ scan, apiBase }) {
         </div>
 
         <div className="flex flex-col gap-2">
-          {results.map((r, i) => (
+          {list.map((r, i) => (
             <div key={i} className="p-3 rounded text-[12px] flex items-center justify-between" style={{ background: C.cardBg, border: `1px solid ${C.border}` }}>
               <div>
                 <span className="font-semibold" style={{ color: C.text }}>{r.finding_title}</span>
@@ -1475,7 +1544,8 @@ function SimulateResultsModal({ scan, selectedFindingIds, onClose, apiBase }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`${apiBase}/scans/${scan.scan_id}/simulate`, {
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans/${scan.scan_id}/simulate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ finding_ids: Array.from(selectedFindingIds) }),
