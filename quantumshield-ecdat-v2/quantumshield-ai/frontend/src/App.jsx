@@ -55,6 +55,42 @@ const CRITICALITY_COLOR = { critical: "F0555C", high: "F0A23C", medium: "D8C13A"
 const MOSCA_COLOR = { at_risk: "F0555C", watch: "F0A23C", safe: "3FCB8F", not_applicable: "5B6270" };
 const EXPOSURE_ICON = { external: Globe, internal: Server, unknown: HelpCircle };
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("Dashboard render error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen w-full flex items-center justify-center p-6" style={{ background: C.bg, color: C.text, fontFamily: FONT }}>
+          <div className="max-w-md p-6 rounded-lg text-center" style={{ background: C.panel, border: `1px solid ${C.critical}` }}>
+            <AlertCircle size={36} color={C.critical} className="mx-auto mb-3" />
+            <h2 className="text-lg font-bold mb-2">Rendering Display Error</h2>
+            <p className="text-[12px] mb-4 text-left p-3 rounded" style={{ background: C.panelRaised, color: C.textMuted, fontFamily: MONO }}>
+              {this.state.error?.message || "An unexpected error occurred while rendering the dashboard."}
+            </p>
+            <button
+              onClick={() => { this.setState({ hasError: false }); window.location.reload(); }}
+              className="px-4 py-2 rounded text-[13px] font-semibold"
+              style={{ background: C.accent, color: "#0C0E12" }}
+            >
+              Reload Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const NAV_ITEMS = [
   { key: "overview", label: "Overview", icon: LayoutGrid },
   { key: "findings", label: "Findings", icon: ListChecks },
@@ -420,15 +456,27 @@ function UploadScreen({ apiBase, setApiBase, onScanComplete }) {
    Overview page
 ------------------------------------------------------------------------- */
 function OverviewPage({ scan, history, findings }) {
-  const s = scan.scores;
-  const gaugeData = [{ value: s.overall_health }];
-  const total = scan.total_findings;
-  const criticalCount = scan.findings_by_severity.critical || 0;
+  const s = scan?.scores || {
+    overall_health: 0,
+    grade: "F",
+    risk_trend: "stable",
+    security_score: 0,
+    quantum_readiness_score: 0,
+    compliance_score: 0,
+  };
+  const gaugeData = [{ value: s.overall_health ?? 0 }];
+  const total = scan?.total_findings ?? 0;
+  const sevMap = scan?.findings_by_severity || {};
+  const criticalCount = sevMap.critical || 0;
 
-  const trendData = history.map((h) => ({
-    scan: new Date(h.completed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-    health: h.scores.overall_health,
-  }));
+  const trendData = Array.isArray(history)
+    ? history
+        .filter((h) => h && h.scores && h.completed_at)
+        .map((h) => ({
+          scan: new Date(h.completed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+          health: h.scores?.overall_health ?? 0,
+        }))
+    : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -1628,7 +1676,13 @@ export default function QuantumShieldDashboard() {
   }, []);
 
   const refreshHistory = useCallback(() => {
-    fetch(`${apiBase}/scans`).then((r) => r.json()).then(setHistory).catch(() => { });
+    const base = normalizeApiBase(apiBase);
+    fetch(`${base}/scans`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (Array.isArray(d)) setHistory(d);
+      })
+      .catch(() => { });
   }, [apiBase]);
 
   function handleScanComplete(data) {
@@ -1640,7 +1694,11 @@ export default function QuantumShieldDashboard() {
   }
 
   if (!scan) {
-    return <UploadScreen apiBase={apiBase} setApiBase={setApiBase} onScanComplete={handleScanComplete} />;
+    return (
+      <ErrorBoundary>
+        <UploadScreen apiBase={apiBase} setApiBase={setApiBase} onScanComplete={handleScanComplete} />
+      </ErrorBoundary>
+    );
   }
 
   const PAGES = {
@@ -1674,70 +1732,72 @@ export default function QuantumShieldDashboard() {
   };
 
   return (
-    <div className="relative min-h-screen w-full flex" style={{ background: "transparent", fontFamily: FONT }}>
-      <BackgroundVideo src="/bg-video.mp4" overlayOpacity={0.75} />
-      <aside className="w-56 shrink-0 flex flex-col py-4 relative z-10" style={{ borderRight: `1px solid ${C.border}`, background: C.bg }}>
-        <div className="flex items-center gap-2 px-4 mb-6">
-          <div className="w-7 h-7 rounded flex items-center justify-center shrink-0" style={{ background: C.accent }}>
-            <ShieldCheck size={16} color="#0C0E12" strokeWidth={2.5} />
+    <ErrorBoundary>
+      <div className="relative min-h-screen w-full flex" style={{ background: "transparent", fontFamily: FONT }}>
+        <BackgroundVideo src="/bg-video.mp4" overlayOpacity={0.75} />
+        <aside className="w-56 shrink-0 flex flex-col py-4 relative z-10" style={{ borderRight: `1px solid ${C.border}`, background: C.bg }}>
+          <div className="flex items-center gap-2 px-4 mb-6">
+            <div className="w-7 h-7 rounded flex items-center justify-center shrink-0" style={{ background: C.accent }}>
+              <ShieldCheck size={16} color="#0C0E12" strokeWidth={2.5} />
+            </div>
+            <div>
+              <p className="text-[13px] font-semibold leading-tight" style={{ color: C.text }}>QuantumShield</p>
+              <p className="text-[10px] leading-tight" style={{ color: C.textFaint }}>Security scanner</p>
+            </div>
           </div>
-          <div>
-            <p className="text-[13px] font-semibold leading-tight" style={{ color: C.text }}>QuantumShield</p>
-            <p className="text-[10px] leading-tight" style={{ color: C.textFaint }}>Security scanner</p>
+          <nav className="flex flex-col gap-0.5 px-2">
+            {NAV_ITEMS.map((item) => {
+              const active = page === item.key;
+              return (
+                <button key={item.key} onClick={() => setPage(item.key)} className="flex items-center gap-2.5 px-3 py-2 rounded text-[13px] text-left"
+                  style={{ background: active ? C.accentDim : "transparent", color: active ? C.accent : C.textMuted }}>
+                  <item.icon size={15} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="mt-auto px-4 pt-4" style={{ borderTop: `1px solid ${C.border}` }}>
+            <p className="text-[10px] leading-snug" style={{ color: C.textFaint }}>
+              Static analysis only — pair with a full audit for compliance sign-off.
+            </p>
           </div>
-        </div>
-        <nav className="flex flex-col gap-0.5 px-2">
-          {NAV_ITEMS.map((item) => {
-            const active = page === item.key;
-            return (
-              <button key={item.key} onClick={() => setPage(item.key)} className="flex items-center gap-2.5 px-3 py-2 rounded text-[13px] text-left"
-                style={{ background: active ? C.accentDim : "transparent", color: active ? C.accent : C.textMuted }}>
-                <item.icon size={15} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="mt-auto px-4 pt-4" style={{ borderTop: `1px solid ${C.border}` }}>
-          <p className="text-[10px] leading-snug" style={{ color: C.textFaint }}>
-            Static analysis only — pair with a full audit for compliance sign-off.
-          </p>
-        </div>
-      </aside>
+        </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 relative z-10">
-        <div className="flex items-center justify-between px-6 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-          <div className="flex items-center gap-2">
-            <span className="text-[13px]" style={{ color: C.text, fontFamily: MONO }}>{scan.target_name}</span>
-            <span className="text-[11px] ml-2" style={{ color: C.textFaint }}>
-              scanned {new Date(scan.completed_at).toLocaleString()}
-            </span>
+        <div className="flex-1 flex flex-col min-w-0 relative z-10">
+          <div className="flex items-center justify-between px-6 py-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div className="flex items-center gap-2">
+              <span className="text-[13px]" style={{ color: C.text, fontFamily: MONO }}>{scan.target_name}</span>
+              <span className="text-[11px] ml-2" style={{ color: C.textFaint }}>
+                scanned {new Date(scan.completed_at).toLocaleString()}
+              </span>
+            </div>
+            <button onClick={() => setScan(null)} className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded" style={{ background: C.accent, color: "#0C0E12", fontWeight: 500 }}>
+              <RefreshCw size={13} />
+              Run new scan
+            </button>
           </div>
-          <button onClick={() => setScan(null)} className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded" style={{ background: C.accent, color: "#0C0E12", fontWeight: 500 }}>
-            <RefreshCw size={13} />
-            Run new scan
-          </button>
+          <div className="px-6 py-4">{PAGES[page]}</div>
         </div>
-        <div className="px-6 py-4">{PAGES[page]}</div>
-      </div>
 
-      {/* Persistent Simulate Fix Floating Panel */}
-      <SimulateFixPanel
-        selectedCount={selectedForSimulation.size}
-        onRunSimulation={() => setShowSimulateModal(true)}
-        onClearSelection={() => setSelectedForSimulation(new Set())}
-      />
-
-      {/* Crypto-Change Impact Simulation Modal */}
-      {showSimulateModal && (
-        <SimulateResultsModal
-          scan={scan}
-          selectedFindingIds={selectedForSimulation}
-          onClose={() => setShowSimulateModal(false)}
-          apiBase={apiBase}
+        {/* Persistent Simulate Fix Floating Panel */}
+        <SimulateFixPanel
+          selectedCount={selectedForSimulation.size}
+          onRunSimulation={() => setShowSimulateModal(true)}
+          onClearSelection={() => setSelectedForSimulation(new Set())}
         />
-      )}
-    </div>
+
+        {/* Crypto-Change Impact Simulation Modal */}
+        {showSimulateModal && (
+          <SimulateResultsModal
+            scan={scan}
+            selectedFindingIds={selectedForSimulation}
+            onClose={() => setShowSimulateModal(false)}
+            apiBase={apiBase}
+          />
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
 
