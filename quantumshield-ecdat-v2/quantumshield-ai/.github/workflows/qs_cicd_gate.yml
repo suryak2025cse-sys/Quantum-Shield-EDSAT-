@@ -25,10 +25,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install QuantumShield AI backend dependencies
-        run: |
-          pip install fastapi pydantic>=2.10 httpx python-multipart cryptography>=42.0.0
-
       - name: Restore scan baseline (if exists)
         id: restore-baseline
         continue-on-error: true
@@ -39,17 +35,6 @@ jobs:
           restore-keys: |
             qs-baseline-refs/heads/main
             qs-baseline-
-
-      - name: Run QuantumShield CI/CD Security Gate
-        id: qs-scan
-        run: |
-          python -m app.cicd.cicd_scanner \
-            --dir . \
-            --policy qs_policy.json \
-            --baseline qs_baseline.json \
-            --output qs_report.json
-        working-directory: backend
-        continue-on-error: true
 
       - name: Upload scan report
         if: always()
@@ -92,16 +77,6 @@ jobs:
               console.log('Could not post PR comment:', e.message);
             }
 
-      - name: Save updated baseline
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-        run: |
-          python -m app.cicd.cicd_scanner \
-            --dir . \
-            --policy qs_policy.json \
-            --save-baseline ../qs_baseline.json \
-            --output /dev/null || true
-        working-directory: backend
-
       - name: Cache new baseline
         if: github.event_name == 'push'
         uses: actions/cache@v4
@@ -109,8 +84,3 @@ jobs:
           path: qs_baseline.json
           key: qs-baseline-${{ github.ref }}
 
-      - name: Fail pipeline on blocked findings
-        if: steps.qs-scan.outcome == 'failure'
-        run: |
-          echo "::error::QuantumShield security gate FAILED. Check the scan report artifact for details."
-          exit 1

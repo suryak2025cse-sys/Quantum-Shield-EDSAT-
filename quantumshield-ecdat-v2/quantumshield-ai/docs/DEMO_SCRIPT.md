@@ -1,4 +1,4 @@
-# QuantumShield AI — SIH Live Demo Script & Runbook
+# QuantumShield AI ï¿½ SIH Live Demo Script & Runbook
 
 This guide contains the exact steps and scripts to deliver a winning **5-minute live demo** of QuantumShield AI on Windows PowerShell or Linux/macOS.
 
@@ -7,45 +7,26 @@ This guide contains the exact steps and scripts to deliver a winning **5-minute 
 ## Quick Setup & Launch Commands
 
 ### 1. Launch Backend (Terminal 1)
-**Windows PowerShell:**
-```powershell
-cd backend
-py -3.12 -m uvicorn app.main:app --reload --port 8000
-```
-
-**Linux / macOS:**
-```bash
-cd backend
-python3 -m uvicorn app.main:app --reload --port 8000
-```
 > Verify health at `http://localhost:8000/health`
 
 ---
 
 ### 2. Launch Frontend (Terminal 2)
-```bash
-cd frontend
-npm run dev
-```
 > Open browser at `http://localhost:5173`
 
 ---
 
 ## 5-Minute SIH Demo Flow
 
-### 0:00–0:45 | Hook & Problem Statement
+### 0:00ï¿½0:45 | Hook & Problem Statement
 - **Narrative:**
   > *"Every organization here scans for known CVEs. But almost nobody has an automated inventory of where asymmetric cryptography lives across their code, certificates, dependencies, and containers.*
   > *With Harvest-Now, Decrypt-Later (HNDL) attacks and NIST's finalized PQC standards (FIPS 203, 204, 205), organizations face compliance deadlines (CNSA 2.0). QuantumShield AI provides an automated Cryptographic Bill of Materials (CBOM), Mosca risk assessment, and phased PQC migration planning."*
 
 ---
 
-### 0:45–1:45 | Live CLI & CycloneDX 1.6 CBOM
-Demonstrate the stand-alone CLI runner live:
-```powershell
-# Windows PowerShell
-py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline --output cbom.json
-```
+### 0:45ï¿½1:45 | Live CLI & CycloneDX 1.6 CBOM
+Demonstrate the stand-alone CLI runner live.
 - Highlight:
   - Discovered 13+ cryptographic findings and dependencies in under 1 second.
   - Generates official **CycloneDX 1.6 JSON CBOM** with component dependency trees.
@@ -53,7 +34,7 @@ py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline
 
 ---
 
-### 1:45–2:45 | Interactive Web Dashboard Walkthrough
+### 1:45ï¿½2:45 | Interactive Web Dashboard Walkthrough
 Switch to `http://localhost:5173` and upload `demo_target.zip` (or scan sample repo):
 1. **Executive Overview**:
    - Distinct **Security Score** (classical vulnerabilities) vs. **Quantum Readiness Score** (Shor's algorithm exposure).
@@ -67,7 +48,7 @@ Switch to `http://localhost:5173` and upload `demo_target.zip` (or scan sample r
 
 ---
 
-### 2:45–3:45 | PQC Migration Validator & What-If Simulation
+### 2:45ï¿½3:45 | PQC Migration Validator & What-If Simulation
 1. **NIST PQC Migration Engine**:
    - Recommends NIST FIPS 203 (ML-KEM-768 hybrid) for key exchange and FIPS 204 (ML-DSA) for signatures.
    - Estimates migration effort (hours), latency impact (+ms), and cost range.
@@ -77,7 +58,7 @@ Switch to `http://localhost:5173` and upload `demo_target.zip` (or scan sample r
 
 ---
 
-### 3:45–4:30 | Offline AI Copilot & Remediation Tickets
+### 3:45ï¿½4:30 | Offline AI Copilot & Remediation Tickets
 1. **Deterministic AI Advisor**:
    - Ask: *"Which finding should I prioritize first for HNDL risk?"*
    - Explains cryptographic blast radius and remediation with zero external API key needed.
@@ -86,11 +67,8 @@ Switch to `http://localhost:5173` and upload `demo_target.zip` (or scan sample r
 
 ---
 
-### 4:30–5:00 | CI/CD Security Gate & Close
-Demonstrate the CI/CD pipeline gate:
-```powershell
-py -3.12 -m app.cicd.cicd_scanner --dir app/scanners/samples/demo_target --format sarif --output results.sarif
-```
+### 4:30ï¿½5:00 | CI/CD Security Gate & Close
+Demonstrate the CI/CD pipeline gate.
 - Blocks commits introducing quantum-vulnerable primitives without agility wrappers.
 - Exports SARIF 2.1.0 directly for GitHub Code Scanning integration.
 
@@ -98,5 +76,5 @@ py -3.12 -m app.cicd.cicd_scanner --dir app/scanners/samples/demo_target --forma
 
 ## Backup Offline Fallback
 If live network or Docker is unavailable:
-- Run with the `--offline` flag: `py -3.12 -m app.scanners.orchestrator app/scanners/samples/demo_target --offline`
+- Use the offline scanner mode.
 - Use the built-in deterministic AI fallback for all advisor explanations and roadmaps.

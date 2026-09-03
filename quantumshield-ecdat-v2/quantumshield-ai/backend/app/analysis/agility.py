@@ -1,45 +1,4 @@
-"""
-Crypto-Agility Difficulty Scorer
-==================================
-Estimates how hard it will be to migrate the cryptographic assets found in
-a codebase to post-quantum equivalents. Produces an `AgilityScore` with:
 
-  score   0-100  (0 = trivially easy, 100 = extremely hard)
-  label   Easy / Moderate / Difficult
-  factors — per-factor breakdown so results are explainable
-
-Factors (all are heuristic estimates from static analysis; labeled as such):
-
-  F1. CRYPTO_USAGE_DENSITY
-      Total number of unique crypto usages (findings). More usages = more
-      migration touch-points = higher difficulty.
-
-  F2. HARDCODED_VS_ABSTRACTED
-      Ratio of findings that are inline hardcoded patterns vs. findings in
-      library/config files. High inline ratio → tightly coupled, harder.
-
-  F3. AFFECTED_FILES
-      Unique file count. Spreading crypto across many files increases the
-      migration surface area.
-
-  F4. FILE_CATEGORY_COUPLING
-      Unique (file, category) pairs — signals how many distinct categories
-      of crypto problem appear per file rather than being concentrated.
-
-  F5. BLOCKERS
-      Count of findings in categories known to slow migration:
-      HSM/KMS (vendor lock-in), DEPENDENCY_CVE (third-party), BINARY_ARTIFACT.
-
-  F6. QUANTUM_FINDINGS_RATIO
-      Proportion of findings that are quantum-vulnerable (need PQC migration,
-      not just a classical fix). PQC migration is widely considered harder
-      than classical upgrades because standards are newer and tooling is sparse.
-
-Weights are calibrated so a typical small project with a few RSA usages
-scores "Easy", a medium-sized project where crypto appears in many files
-scores "Moderate", and a large enterprise project with HSM dependencies
-and many quantum-vulnerable usages scores "Difficult".
-"""
 from __future__ import annotations
 
 import math
@@ -52,8 +11,6 @@ from app.models.schemas import (
     Category,
     Finding,
 )
-
-# Weight of each factor's contribution toward the 0-100 score
 FACTOR_WEIGHTS = {
     "CRYPTO_USAGE_DENSITY":    20.0,
     "HARDCODED_VS_ABSTRACTED": 20.0,

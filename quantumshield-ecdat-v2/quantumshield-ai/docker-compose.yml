@@ -19,7 +19,6 @@ services:
 
   celery_worker:
     build: ./backend
-    command: celery -A app.worker.celery_app worker --loglevel=info
     environment:
       - MONGODB_URI=mongodb://mongo:27017
       - REDIS_URI=redis://redis:6379/0

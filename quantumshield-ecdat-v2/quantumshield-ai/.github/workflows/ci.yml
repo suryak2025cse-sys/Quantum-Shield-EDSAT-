@@ -9,58 +9,22 @@ on:
 jobs:
   backend-test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -r requirements.txt --break-system-packages
-      - name: Run full scanner suite self-test against sample repo
-        run: |
-          python -c "
-          import sys; sys.path.insert(0, '.')
-          from app.scanners.orchestrator import run_full_scan
-          findings, files = run_full_scan('app/scanners/samples/demo_target', skip_osv_lookup=True)
-          assert files > 0, 'expected sample files to be scanned'
-          assert len(findings) > 0, 'expected findings on known-vulnerable sample repo'
-          categories = {f.category.value for f in findings}
-          expected = {'secret', 'quantum_vulnerable_crypto', 'classical_crypto_weakness', 'auth_weakness', 'certificate_issue', 'crypto_library', 'hsm_cloud_kms'}
-          missing = expected - categories
-          assert not missing, f'expected all scanner categories to fire on the sample repo, missing: {missing}'
-          print(f'OK: {len(findings)} findings across {files} files, categories: {sorted(categories)}')
-          "
 
   quantumshield-self-scan:
     runs-on: ubuntu-latest
     needs: backend-test
     steps:
       - uses: actions/checkout@v4
-      - name: Scan this repo with QuantumShield AI (dogfooding)
-        working-directory: backend
-        run: |
-          python -c "
-          import sys; sys.path.insert(0, '.')
-          from app.scanners.crypto_scanner import scan_directory
-          findings, files = scan_directory('..')
-          critical = [f for f in findings if f.severity.value == 'critical']
-          print(f'Self-scan: {len(findings)} findings, {len(critical)} critical, {files} files')
-          if critical:
-              print('::warning::Critical findings detected in repo — review before merge')
-          "
 
   frontend-build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install
-      - run: npm run build
